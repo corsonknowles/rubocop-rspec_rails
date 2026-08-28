@@ -42,6 +42,99 @@ end
 
 * https://www.rubydoc.info/gems/rubocop-rspec_rails/RuboCop/Cop/RSpecRails/AvoidSetupHook
 
+[#rspecrailshardcodedid]
+== RSpecRails/HardcodedId
+
+|===
+| Enabled by default | Safe | Supports autocorrection | Version Added | Version Changed
+
+| Pending
+| Yes
+| No
+| 2.33
+| -
+|===
+
+Checks for a hardcoded `id:` passed to a persisting builder.
+
+Forcing a primary key in a spec collides with whatever else occupies
+that row -- fixtures, parallel workers, the table's auto-increment
+sequence -- and is a common source of flaky, order-dependent
+failures. Let the database assign the id and reference the returned
+record.
+
+Only `create`, `create!` and `create_list` are flagged: they insert a
+row, so a forced primary key is an outright collision risk.
+`create_list` is the worst case, forcing the identical id onto every
+record it generates. `build` and `build_stubbed` never insert, so
+they are left alone.
+
+Both `id:` and `'id' =>` are flagged: FactoryBot symbolizes override
+keys and ActiveRecord treats string and symbol attribute keys
+identically on mass-assignment, so a string-rocket key forces the
+same primary key.
+
+Only literal values are flagged. A value read from another record or
+a variable (`id: company.id`, `id: company_id`) is a reference, not a
+magic constant.
+
+[#examples-rspecrailshardcodedid]
+=== Examples
+
+[source,ruby]
+----
+# bad
+create(:company, id: 123)
+create(:company, 'id' => 123)
+create_list(:company, 3, id: 123)
+Company.create!(id: '123456789')
+
+# good - let the database assign the id
+company = create(:company)
+
+# good - a transitive record id is a reference, not a constant
+create(:employee, id: company.id)
+----
+
+[#allowedfactories_-__money__-_default_-___-rspecrailshardcodedid]
+==== AllowedFactories: ['money'] (default: [])
+
+[source,ruby]
+----
+# good - a factory that builds a value object rather than a row,
+# so `id:` is the object's own identity
+create(:money, id: 123)
+----
+
+[#allowedreceivers_-__reporting__row__-_default_-___-rspecrailshardcodedid]
+==== AllowedReceivers: ['Reporting::Row'] (default: [])
+
+[source,ruby]
+----
+# good - a constant whose `create` is not ActiveRecord's
+Reporting::Row.create(id: 123)
+----
+
+[#configurable-attributes-rspecrailshardcodedid]
+=== Configurable attributes
+
+|===
+| Name | Default value | Configurable values
+
+| AllowedFactories
+| `[]`
+| Array
+
+| AllowedReceivers
+| `[]`
+| Array
+|===
+
+[#references-rspecrailshardcodedid]
+=== References
+
+* https://www.rubydoc.info/gems/rubocop-rspec_rails/RuboCop/Cop/RSpecRails/HardcodedId
+
 [#rspecrailshavehttpstatus]
 == RSpecRails/HaveHttpStatus
 
