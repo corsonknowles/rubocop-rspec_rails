@@ -16,7 +16,7 @@ RSpecRails/HardcodedAbsentRecordId:
   Description: Checks for a hardcoded id standing in for an absent record.
   Enabled: pending
   AllowedNames: []
-  MaxId: 1000000
+  MaxId: 100000
   SafeAutoCorrect: false
   VersionAdded: '2.33'
   Reference: https://www.rubydoc.info/gems/rubocop-rspec_rails/RuboCop/Cop/RSpecRails/HardcodedAbsentRecordId

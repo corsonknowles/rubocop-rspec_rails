@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
-  let(:cop_config) { { 'MaxId' => 1_000_000 } }
+  let(:cop_config) { { 'MaxId' => 100_000 } }
 
   it 'registers an offense when a group says the record does not exist' do
     expect_offense(<<~RUBY)
@@ -106,11 +106,26 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
     RUBY
   end
 
-  it 'registers an offense for a cross-tenant description' do
-    expect_offense(<<~RUBY)
+  it 'does not register an offense for a cross-tenant description' do
+    expect_no_offenses(<<~RUBY)
       context 'for another account' do
         let(:requested_account_id) { 2 }
-                                     ^ Use a negative id for a record expected to be absent.
+      end
+    RUBY
+  end
+
+  it 'does not register an offense for a mismatch description' do
+    expect_no_offenses(<<~RUBY)
+      context 'when the commit does not belong to the merge request' do
+        let(:parent_ids) { [1] }
+      end
+    RUBY
+  end
+
+  it 'does not register an offense for a malformed-id description' do
+    expect_no_offenses(<<~RUBY)
+      context 'with invalid id' do
+        let(:invalid_id) { 123 }
       end
     RUBY
   end
@@ -169,8 +184,8 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
   it 'registers an offense for a lone literal beside real record ids' do
     expect_offense(<<~RUBY)
       context 'with multiple user IDs' do
-        let(:user_ids) { [user.id, other_user.id, 999999] }
-                                                  ^^^^^^ Use a negative id for a record expected to be absent.
+        let(:user_ids) { [user.id, other_user.id, 99999] }
+                                                  ^^^^^ Use a negative id for a record expected to be absent.
       end
     RUBY
 
@@ -193,8 +208,8 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
   it 'registers an offense for a list the group calls absent' do
     expect_offense(<<~RUBY)
       context 'when the user does not exist' do
-        let(:user_ids) { [999999] }
-                          ^^^^^^ Use a negative id for a record expected to be absent.
+        let(:user_ids) { [99999] }
+                          ^^^^^ Use a negative id for a record expected to be absent.
       end
     RUBY
   end
@@ -383,7 +398,7 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
 
   it 'does not register an offense when the literal is inlined' do
     expect_no_offenses(<<~RUBY)
-      describe 'unauthorized access' do
+      describe 'when the user does not exist' do
         let(:user_id) { 2 }
 
         before { create(:user, id: 2) }
@@ -419,6 +434,69 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
                         ^ Use a negative id for a record expected to be absent.
 
         before { create(:user, user_id: 3) }
+      end
+    RUBY
+  end
+
+  it 'does not register an offense when the built record carries it' do
+    expect_no_offenses(<<~RUBY)
+      context 'when the card does not exist' do
+        let(:card_id) { 123 }
+
+        before { create(:card, corepro_card_id: 123) }
+      end
+    RUBY
+  end
+
+  it 'registers an offense when the builder only points at the id' do
+    expect_offense(<<~RUBY)
+      context 'when the account does not exist' do
+        let(:account_id) { 1 }
+                           ^ Use a negative id for a record expected to be absent.
+
+        before { create(:user, account_id: 1) }
+      end
+    RUBY
+  end
+
+  it 'registers an offense when a receiver builder points at the id' do
+    expect_offense(<<~RUBY)
+      context 'when the account does not exist' do
+        let(:account_id) { 2 }
+                           ^ Use a negative id for a record expected to be absent.
+
+        before { User.create!(account_id: 2) }
+      end
+    RUBY
+  end
+
+  it 'does not register an offense when a receiver builder carries it' do
+    expect_no_offenses(<<~RUBY)
+      context 'when the user does not exist' do
+        let(:user_id) { 2 }
+
+        before { User.create!(id: 2) }
+      end
+    RUBY
+  end
+
+  it 'registers an offense when a builder takes no arguments' do
+    expect_offense(<<~RUBY)
+      context 'when the account does not exist' do
+        let(:account_id) { 1 }
+                           ^ Use a negative id for a record expected to be absent.
+
+        before { described_class.create }
+      end
+    RUBY
+  end
+
+  it 'does not register an offense when `create_pair` builds that id' do
+    expect_no_offenses(<<~RUBY)
+      context 'when the user does not exist' do
+        let(:user_id) { 123 }
+
+        before { create_pair(:user, id: 123) }
       end
     RUBY
   end
@@ -479,7 +557,7 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
 
   it 'does not register an offense for a group pinning two ids' do
     expect_no_offenses(<<~RUBY)
-      context 'for a different account' do
+      context 'when the account does not exist' do
         let(:account_id) { 456 }
         let(:existing_setting_account_id) { 123 }
       end
@@ -488,7 +566,7 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
 
   it 'registers an offense for a lone id beside a non-collidable one' do
     expect_offense(<<~RUBY)
-      context 'for a different account' do
+      context 'when the account does not exist' do
         let(:account_id) { 456 }
                            ^^^ Use a negative id for a record expected to be absent.
         let(:existing_setting_account_id) { -1 }
@@ -518,10 +596,26 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
     RUBY
   end
 
-  it 'does not register an offense for a list holding two literals' do
-    expect_no_offenses(<<~RUBY)
+  it 'registers an offense per literal in a list, corrected to differ' do
+    expect_offense(<<~RUBY)
       context 'when the users do not exist' do
         let(:user_ids) { [user.id, 999, 1000] }
+                                   ^^^ Use a negative id for a record expected to be absent.
+                                        ^^^^ Use a negative id for a record expected to be absent.
+      end
+    RUBY
+
+    expect_correction(<<~RUBY)
+      context 'when the users do not exist' do
+        let(:user_ids) { [user.id, -1, -2] }
+      end
+    RUBY
+  end
+
+  it 'does not register an offense for a format-validation list' do
+    expect_no_offenses(<<~RUBY)
+      context 'with several ids' do
+        let(:invalid_ids) { ['story', 'story-', '-', '123', ''] }
       end
     RUBY
   end
@@ -556,7 +650,7 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
     expect_no_offenses(<<~RUBY)
       RSpec.describe Controller, vcr: { cassette_name: 'x', match_requests_on: [:method, :uri] } do
         context 'when the user does not exist' do
-          let(:user_id) { 111111 }
+          let(:user_id) { 11111 }
         end
       end
     RUBY
@@ -566,7 +660,7 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
     expect_no_offenses(<<~RUBY)
       RSpec.describe Controller, :vcr do
         context 'when the user does not exist' do
-          let(:user_id) { 111111 }
+          let(:user_id) { 11111 }
         end
       end
     RUBY
@@ -576,8 +670,8 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
     expect_offense(<<~RUBY)
       RSpec.describe Controller, :request, other: { a: 1 } do
         context 'when the user does not exist' do
-          let(:user_id) { 111111 }
-                          ^^^^^^ Use a negative id for a record expected to be absent.
+          let(:user_id) { 11111 }
+                          ^^^^^ Use a negative id for a record expected to be absent.
         end
       end
     RUBY
@@ -587,8 +681,8 @@ RSpec.describe RuboCop::Cop::RSpecRails::HardcodedAbsentRecordId do
     expect_offense(<<~RUBY)
       RSpec.describe Controller, some_key => 1 do
         context 'when the user does not exist' do
-          let(:user_id) { 111111 }
-                          ^^^^^^ Use a negative id for a record expected to be absent.
+          let(:user_id) { 11111 }
+                          ^^^^^ Use a negative id for a record expected to be absent.
         end
       end
     RUBY

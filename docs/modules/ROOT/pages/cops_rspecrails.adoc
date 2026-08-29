@@ -65,20 +65,25 @@ where the counter is low, and failing in CI. A negative id cannot
 collide, because auto-increment never emits one.
 
 An id counts as standing in for an absent record when its own example
-group either asserts absence (`ActiveRecord::RecordNotFound`, a
+group either expects absence (`ActiveRecord::RecordNotFound`, a
 `:not_found` response) or says so in its description. Both are read
 from the group the `let` is written in, not the whole file, so a
 shared id in an outer group is not attributed to a nested example
 that never uses it.
 
+The description has to name absence, not mismatch. A group saying the
+record belongs to someone else, or that an id is invalid, is about a
+row that exists.
+
 In a list, a literal sitting beside a real `record.id` also qualifies
 on its own: you would write another `record.id` if you wanted one
-that exists.
+that exists. A list only reads as record ids when every member is
+one, so `['story', '123', '']` is a format fixture and is skipped.
 
 Not offenses: a group that builds a record carrying that id, a
 `RecordNotFound` raised by reloading a row the example just deleted,
-a literal above `MaxId`, and a group pinning two ids, which are
-usually pinned to differ from each other.
+a literal above `MaxId`, and a group pinning two scalar ids, which
+are usually pinned to differ from each other.
 
 [#safety-rspecrailshardcodedabsentrecordid]
 === Safety
@@ -103,7 +108,7 @@ context 'when the user does not exist' do
 end
 
 # bad - the literal is there precisely because no record has it
-let(:user_ids) { [user.id, other_user.id, 999_999] }
+let(:user_ids) { [user.id, other_user.id, 99_999] }
 
 # good - auto-increment never emits a negative id
 context 'when the user does not exist' do
@@ -129,13 +134,15 @@ context 'when the transfer does not exist' do
 end
 ----
 
-[#maxid_-1000000-_default_-rspecrailshardcodedabsentrecordid]
-==== MaxId: 1000000 (default)
+[#maxid_-100000-_default_-rspecrailshardcodedabsentrecordid]
+==== MaxId: 100000 (default)
 
 [source,ruby]
 ----
 # good - above MaxId the literal is a deliberate sentinel
-let(:user_id) { 9_999_999_999 }
+context 'when the user does not exist' do
+  let(:user_id) { 999_999 }
+end
 ----
 
 [#configurable-attributes-rspecrailshardcodedabsentrecordid]
@@ -149,7 +156,7 @@ let(:user_id) { 9_999_999_999 }
 | Array
 
 | MaxId
-| `1000000`
+| `100000`
 | Integer
 |===
 

@@ -13,20 +13,25 @@ module RuboCop
       # collide, because auto-increment never emits one.
       #
       # An id counts as standing in for an absent record when its own example
-      # group either asserts absence (`ActiveRecord::RecordNotFound`, a
+      # group either expects absence (`ActiveRecord::RecordNotFound`, a
       # `:not_found` response) or says so in its description. Both are read
       # from the group the `let` is written in, not the whole file, so a
       # shared id in an outer group is not attributed to a nested example
       # that never uses it.
       #
+      # The description has to name absence, not mismatch. A group saying the
+      # record belongs to someone else, or that an id is invalid, is about a
+      # row that exists.
+      #
       # In a list, a literal sitting beside a real `record.id` also qualifies
       # on its own: you would write another `record.id` if you wanted one
-      # that exists.
+      # that exists. A list only reads as record ids when every member is
+      # one, so `['story', '123', '']` is a format fixture and is skipped.
       #
       # Not offenses: a group that builds a record carrying that id, a
       # `RecordNotFound` raised by reloading a row the example just deleted,
-      # a literal above `MaxId`, and a group pinning two ids, which are
-      # usually pinned to differ from each other.
+      # a literal above `MaxId`, and a group pinning two scalar ids, which
+      # are usually pinned to differ from each other.
       #
       # @safety
       #   Autocorrection is unsafe. `-1` is right for a primary key, but it
@@ -45,7 +50,7 @@ module RuboCop
       #   end
       #
       #   # bad - the literal is there precisely because no record has it
-      #   let(:user_ids) { [user.id, other_user.id, 999_999] }
+      #   let(:user_ids) { [user.id, other_user.id, 99_999] }
       #
       #   # good - auto-increment never emits a negative id
       #   context 'when the user does not exist' do
@@ -65,9 +70,11 @@ module RuboCop
       #     let(:wise_id) { 5678 }
       #   end
       #
-      # @example MaxId: 1000000 (default)
+      # @example MaxId: 100000 (default)
       #   # good - above MaxId the literal is a deliberate sentinel
-      #   let(:user_id) { 9_999_999_999 }
+      #   context 'when the user does not exist' do
+      #     let(:user_id) { 999_999 }
+      #   end
       #
       class HardcodedAbsentRecordId < RuboCop::Cop::RSpec::Base
         extend AutoCorrector
@@ -78,24 +85,18 @@ module RuboCop
         # `id` itself, or any `<something>_id`, singular or plural.
         ID_NAME = /\A(ids?|.+_ids?)\z/.freeze
 
-        # Each phrase is unambiguous on its own: a bare "missing" or
-        # "unknown" reads just as naturally about a header or a flag.
+        # Only wording that names absence. "Invalid", "does not belong" and
+        # "unauthorized" describe a row that exists and is the wrong one,
+        # which is a different example and a different fix.
         ABSENT_DESCRIPTION = /
           (does|do|did)\s*n[o']?t\s+exist | \bnot\s+exist |
           \bnot\s+found\b | (cannot|can\s*not|can't|couldn't)\s+be\s+found |
-          is\s*n[o']?t\s+found | non-?\s?existent | no\s+such |
-          invalid\s+\w*\s*\bid\b | \bid\b\s+is\s+invalid |
-          does\s*n[o']?t\s+belong | not\s+belong\s+to |
-          unauthorized\s+access |
-          (another|other|different)\s+
-            (account|company|customer|member|org|person|user)
+          is\s*n[o']?t\s+found | non-?\s?existent | no\s+such
         /xi.freeze
 
         NOT_FOUND = /RecordNotFound/.freeze
         NOT_FOUND_STATUS = /\A:?(not_found|404)\z/.freeze
-        BUILDERS = %i[build build! build_list build_stubbed
-                      build_stubbed_list create create! create_list].freeze
-        DEFAULT_MAX_ID = 1_000_000
+        DEFAULT_MAX_ID = 100_000
 
         # @!method let_definition(node)
         def_node_matcher :let_definition, <<~PATTERN
@@ -133,19 +134,33 @@ module RuboCop
           register(literal)
         end
 
-        # Only a lone literal qualifies. Two would both correct to `-1`, and
-        # a duplicated id collapses on lookup, changing the asserted count.
         def check_list(node, name, array)
+          return if format_fixture?(array)
+
           literals = array.children.select { |item| collidable_id(item) }
-          return unless literals.one?
-
           group = enclosing_example_group(node)
-          return unless list_qualifies?(array, group)
+          return if literals.empty? || !list_qualifies?(array, group)
 
-          literal = literals.first
-          return if group && built_with?(group, name, collidable_id(literal))
+          register_list(literals, group, name)
+        end
 
-          register(literal)
+        # Each literal gets its own negative: a duplicated id collapses on
+        # lookup, which would change the count the example asserts.
+        def register_list(literals, group, name)
+          literals.each_with_index do |literal, index|
+            next if group && built_with?(group, name, collidable_id(literal))
+
+            register(literal, -(index + 1))
+          end
+        end
+
+        # `['story', 'story-', '123', '']` lists the shapes an id parser has
+        # to reject, so its numeric member is a format, not a primary key.
+        def format_fixture?(array)
+          array.children.any? do |item|
+            item.type?(:str, :sym) &&
+              Integer(item.value.to_s, exception: false).nil?
+          end
         end
 
         def list_qualifies?(array, group)
@@ -153,10 +168,10 @@ module RuboCop
           real_id || (!group.nil? && absent_context?(group))
         end
 
-        def register(literal)
-          add_offense(literal) do |corrector|
-            corrector.replace(literal, literal.str_type? ? "'-1'" : '-1')
-          end
+        def register(literal, replacement = -1)
+          negative = replacement.to_s
+          negative = "'#{negative}'" if literal.str_type?
+          add_offense(literal) { |corr| corr.replace(literal, negative) }
         end
 
         def collidable_id(node)
@@ -229,23 +244,30 @@ module RuboCop
             (any_block (send nil? {:let :let!} (sym $_) ...) _ $_)
           PATTERN
 
+          # @!method builder_calls(node)
+          def_node_search :builder_calls, <<~PATTERN
+            $(send _ {:build :build! :build_list :build_pair :build_stubbed
+                      :build_stubbed_list :create :create! :create_list
+                      :create_pair} ...)
+          PATTERN
+
           def initialize(group, max_id)
             @group = group
             @max_id = max_id
           end
 
           def absent?
-            absent_description? || not_found_assertion?(group.body)
+            absent_description? || not_found_expectation?(group.body)
           end
 
           # A group that builds a record carrying this id means the row is
           # meant to exist, so its absence is about something else.
           def builds?(name, value)
-            group.each_descendant(:send).any? do |send_node|
-              BUILDERS.include?(send_node.method_name) &&
-                send_node.each_descendant.any? do |argument|
-                  references?(argument, name) || same_id_value?(argument, value)
-                end
+            builder_calls(group).any? do |call|
+              factory = factory_name(call)
+              call.each_descendant(:send, :pair).any? do |node|
+                references?(node, name) || own_attribute?(node, factory, value)
+              end
             end
           end
 
@@ -268,12 +290,26 @@ module RuboCop
             node.send_type? && node.receiver.nil? && node.method?(name)
           end
 
-          # `create(:user, account_id: 1)` beside `let(:account_id) { 1 }`
-          # builds the row this id selects, even when the literal is inlined.
-          def same_id_value?(node, value)
-            node.pair_type? && node.key.type?(:sym, :str) &&
-              node.key.value.to_s.match?(ID_NAME) &&
-              collidable_id(node.value) == value
+          def factory_name(call)
+            first_argument = call.first_argument
+            first_argument.value.to_s if first_argument&.sym_type?
+          end
+
+          # The built record carries the id when the key is its own primary
+          # key, or when the attribute is named for the factory, as in
+          # `create(:card, corepro_card_id: 123)`. A key naming another
+          # table is a foreign key: `create(:user, account_id: 1)` points at
+          # the accounts row the example says is absent rather than creating
+          # it, so it is not treated as building it.
+          def own_attribute?(node, factory, value)
+            return false unless node.pair_type? &&
+              node.key.type?(:sym, :str)
+
+            key = node.key.value.to_s
+            return false unless key.match?(ID_NAME)
+            return false unless collidable_id(node.value) == value
+
+            key == 'id' || (!factory.nil? && key.include?(factory))
           end
 
           def own_lets(node, found = [])
@@ -296,19 +332,19 @@ module RuboCop
           end
 
           # Scoped to this group: the walk stops at a nested example group,
-          # whose assertions belong to whatever that group redefines.
-          def not_found_assertion?(node)
+          # whose expectations belong to whatever that group redefines.
+          def not_found_expectation?(node)
             return false if node.type?(:any_block) && example_group?(node)
             return true if node.send_type? && not_found_matcher?(node)
 
-            node.each_child_node.any? { |child| not_found_assertion?(child) }
+            node.each_child_node.any? { |child| not_found_expectation?(child) }
           end
 
           def not_found_matcher?(node)
             case node.method_name
             when :raise_error, :raise_exception
               node.arguments.any? { |arg| NOT_FOUND.match?(arg.source) } &&
-                !deleted_record_assertion?(node)
+                !deleted_record_expectation?(node)
             when :have_http_status
               NOT_FOUND_STATUS.match?(node.first_argument&.source.to_s)
             when :be_not_found then true
@@ -316,11 +352,11 @@ module RuboCop
             end
           end
 
-          # `expect { record.reload }.to raise_error(RecordNotFound)` asserts
+          # `expect { record.reload }.to raise_error(RecordNotFound)` expects
           # that a row the example already holds was deleted by the code under
           # test. That is about the object, not about the literal -- which is
           # usually what selected the row for deletion in the first place.
-          def deleted_record_assertion?(node)
+          def deleted_record_expectation?(node)
             subject = node.each_ancestor(:send).first&.receiver
             return false unless subject&.type?(:any_block)
 
